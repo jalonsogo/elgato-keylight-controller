@@ -1172,8 +1172,9 @@ COMMANDS:
   detect                      Discover lights on network
   status                      Show status of all lights
 
+  <light_name|index>          Toggle specific light
   <light_name> <command>      Control specific light
-                              Example: keylight "Elgato Key Light 1" on
+                              Commands: on, off, bright [+|-|value], temp [+|-|value]
 
   help                        Show this help message
 
@@ -1182,6 +1183,9 @@ EXAMPLES:
   keylight bright 50          Set all lights to 50% brightness
   keylight temp 4000          Set all lights to 4000K
   keylight bright =           Match brightness across all lights
+  keylight 1                  Toggle light 1
+  keylight 2 bright +         Increase light 2 brightness
+  keylight "My Light" on      Turn on specific light
   keylight status             Check status of all lights
 `
 	fmt.Println(help)
@@ -1222,9 +1226,14 @@ func cliSpecificLight(config *Config, lightIdentifier string) {
 		os.Exit(1)
 	}
 
+	// If no command specified, toggle the light
 	if len(os.Args) < 3 {
-		fmt.Printf("Usage: keylight \"%s\" [on|off|bright|temp] [args]\n", targetName)
-		os.Exit(1)
+		if err := toggleLight(targetIP); err != nil {
+			fmt.Printf("✗ Failed to toggle %s\n", targetName)
+		} else {
+			fmt.Printf("✓ Toggled %s\n", targetName)
+		}
+		return
 	}
 
 	command := os.Args[2]
