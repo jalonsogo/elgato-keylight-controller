@@ -1,0 +1,18 @@
+# Binaries
+keylight-go
+
+# Config
+.claude/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
