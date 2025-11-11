@@ -1246,45 +1246,115 @@ func cliSpecificLight(config *Config, lightIdentifier string) {
 		}
 	case "bright":
 		if len(os.Args) < 4 {
-			fmt.Println("Usage: keylight <light> bright [value]")
+			fmt.Println("Usage: keylight <light> bright [+|-|value]")
 			os.Exit(1)
 		}
-		var brightness int
-		n, err := fmt.Sscanf(os.Args[3], "%d", &brightness)
-		if n == 1 && err == nil {
-			if brightness < 3 || brightness > 100 {
-				fmt.Println("Brightness must be between 3 and 100")
+		action := os.Args[3]
+		switch action {
+		case "+":
+			state, err := getLightState(targetIP)
+			if err != nil {
+				fmt.Printf("✗ Failed to get state for %s\n", targetName)
 				os.Exit(1)
 			}
-			if err := setLight(targetIP, nil, &brightness, nil); err != nil {
-				fmt.Printf("✗ Failed to set brightness for %s\n", targetName)
-			} else {
-				fmt.Printf("✓ %s brightness: %d%%\n", targetName, brightness)
+			newBright := state.Brightness + 5
+			if newBright > 100 {
+				newBright = 100
 			}
-		} else {
-			fmt.Println("Invalid brightness value")
-			os.Exit(1)
+			if err := setLight(targetIP, nil, &newBright, nil); err != nil {
+				fmt.Printf("✗ Failed to adjust %s\n", targetName)
+			} else {
+				fmt.Printf("✓ %s brightness: %d%%\n", targetName, newBright)
+			}
+		case "-":
+			state, err := getLightState(targetIP)
+			if err != nil {
+				fmt.Printf("✗ Failed to get state for %s\n", targetName)
+				os.Exit(1)
+			}
+			newBright := state.Brightness - 5
+			if newBright < 3 {
+				newBright = 3
+			}
+			if err := setLight(targetIP, nil, &newBright, nil); err != nil {
+				fmt.Printf("✗ Failed to adjust %s\n", targetName)
+			} else {
+				fmt.Printf("✓ %s brightness: %d%%\n", targetName, newBright)
+			}
+		default:
+			var brightness int
+			n, err := fmt.Sscanf(action, "%d", &brightness)
+			if n == 1 && err == nil {
+				if brightness < 3 || brightness > 100 {
+					fmt.Println("Brightness must be between 3 and 100")
+					os.Exit(1)
+				}
+				if err := setLight(targetIP, nil, &brightness, nil); err != nil {
+					fmt.Printf("✗ Failed to set brightness for %s\n", targetName)
+				} else {
+					fmt.Printf("✓ %s brightness: %d%%\n", targetName, brightness)
+				}
+			} else {
+				fmt.Println("Invalid brightness value")
+				os.Exit(1)
+			}
 		}
 	case "temp":
 		if len(os.Args) < 4 {
-			fmt.Println("Usage: keylight <light> temp [value]")
+			fmt.Println("Usage: keylight <light> temp [+|-|value]")
 			os.Exit(1)
 		}
-		var temperature int
-		n, err := fmt.Sscanf(os.Args[3], "%d", &temperature)
-		if n == 1 && err == nil {
-			if temperature < 2900 || temperature > 7000 {
-				fmt.Println("Temperature must be between 2900K and 7000K")
+		action := os.Args[3]
+		switch action {
+		case "+":
+			state, err := getLightState(targetIP)
+			if err != nil {
+				fmt.Printf("✗ Failed to get state for %s\n", targetName)
 				os.Exit(1)
 			}
-			if err := setLight(targetIP, nil, nil, &temperature); err != nil {
-				fmt.Printf("✗ Failed to set temperature for %s\n", targetName)
-			} else {
-				fmt.Printf("✓ %s temperature: %dK\n", targetName, temperature)
+			currentTemp := int(1000000 / state.Temperature)
+			newTemp := currentTemp + 200
+			if newTemp > 7000 {
+				newTemp = 7000
 			}
-		} else {
-			fmt.Println("Invalid temperature value")
-			os.Exit(1)
+			if err := setLight(targetIP, nil, nil, &newTemp); err != nil {
+				fmt.Printf("✗ Failed to adjust %s\n", targetName)
+			} else {
+				fmt.Printf("✓ %s temperature: %dK\n", targetName, newTemp)
+			}
+		case "-":
+			state, err := getLightState(targetIP)
+			if err != nil {
+				fmt.Printf("✗ Failed to get state for %s\n", targetName)
+				os.Exit(1)
+			}
+			currentTemp := int(1000000 / state.Temperature)
+			newTemp := currentTemp - 200
+			if newTemp < 2900 {
+				newTemp = 2900
+			}
+			if err := setLight(targetIP, nil, nil, &newTemp); err != nil {
+				fmt.Printf("✗ Failed to adjust %s\n", targetName)
+			} else {
+				fmt.Printf("✓ %s temperature: %dK\n", targetName, newTemp)
+			}
+		default:
+			var temperature int
+			n, err := fmt.Sscanf(action, "%d", &temperature)
+			if n == 1 && err == nil {
+				if temperature < 2900 || temperature > 7000 {
+					fmt.Println("Temperature must be between 2900K and 7000K")
+					os.Exit(1)
+				}
+				if err := setLight(targetIP, nil, nil, &temperature); err != nil {
+					fmt.Printf("✗ Failed to set temperature for %s\n", targetName)
+				} else {
+					fmt.Printf("✓ %s temperature: %dK\n", targetName, temperature)
+				}
+			} else {
+				fmt.Println("Invalid temperature value")
+				os.Exit(1)
+			}
 		}
 	case "status":
 		state, err := getLightState(targetIP)
