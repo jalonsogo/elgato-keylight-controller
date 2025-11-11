@@ -777,6 +777,17 @@ func toggleLight(ip string) error {
 }
 
 func main() {
+	// Check if CLI command is provided
+	if len(os.Args) > 1 {
+		handleCLI()
+		return
+	}
+
+	// No CLI args - run TUI
+	runTUI()
+}
+
+func runTUI() {
 	// Check if lights are configured
 	config := loadConfig()
 	if len(config.Lights) == 0 {
@@ -784,36 +795,7 @@ func main() {
 		fmt.Println("Please wait...")
 
 		// Run discovery in blocking mode on first run
-		resolver, err := zeroconf.NewResolver(nil)
-		if err != nil {
-			fmt.Println("Error: Failed to create resolver")
-			os.Exit(1)
-		}
-
-		entries := make(chan *zeroconf.ServiceEntry)
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-		defer cancel()
-
-		err = resolver.Browse(ctx, "_elg._tcp", "local.", entries)
-		if err != nil {
-			fmt.Println("Error: Failed to discover")
-			os.Exit(1)
-		}
-
-		discovered := make(map[string]string)
-		go func() {
-			for entry := range entries {
-				if len(entry.AddrIPv4) > 0 {
-					name := entry.Instance
-					ip := entry.AddrIPv4[0].String()
-					discovered[name] = ip
-					fmt.Printf("Found: %s at %s\n", name, ip)
-				}
-			}
-		}()
-
-		<-ctx.Done()
-
+		discovered := runDiscovery()
 		if len(discovered) == 0 {
 			fmt.Println("No lights found. Make sure they are powered on.")
 			os.Exit(1)
@@ -828,6 +810,497 @@ func main() {
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error: %v", err)
+		os.Exit(1)
+	}
+}
+
+func runDiscovery() map[string]string {
+	resolver, err := zeroconf.NewResolver(nil)
+	if err != nil {
+		fmt.Println("Error: Failed to create resolver")
+		return nil
+	}
+
+	entries := make(chan *zeroconf.ServiceEntry)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+
+	err = resolver.Browse(ctx, "_elg._tcp", "local.", entries)
+	if err != nil {
+		fmt.Println("Error: Failed to discover")
+		return nil
+	}
+
+	discovered := make(map[string]string)
+	go func() {
+		for entry := range entries {
+			if len(entry.AddrIPv4) > 0 {
+				name := entry.Instance
+				ip := entry.AddrIPv4[0].String()
+				discovered[name] = ip
+				fmt.Printf("Found: %s at %s\n", name, ip)
+			}
+		}
+	}()
+
+	<-ctx.Done()
+	return discovered
+}
+
+func handleCLI() {
+	config := loadConfig()
+
+	// Check if lights are configured
+	if len(config.Lights) == 0 && os.Args[1] != "detect" && os.Args[1] != "help" {
+		fmt.Println("No lights configured. Please run: keylight detect")
+		os.Exit(1)
+	}
+
+	command := os.Args[1]
+
+	switch command {
+	case "on":
+		cliTurnOn(config)
+	case "off":
+		cliTurnOff(config)
+	case "bright":
+		cliBrightness(config)
+	case "temp":
+		cliTemperature(config)
+	case "list":
+		cliList(config)
+	case "detect":
+		cliDetect()
+	case "status":
+		cliStatus(config)
+	case "help":
+		cliHelp()
+	default:
+		// Check if it's a light name or ID
+		cliSpecificLight(config, command)
+	}
+}
+
+// CLI Commands
+
+func cliTurnOn(config *Config) {
+	for name, ip := range config.Lights {
+		onState := 1
+		if err := setLight(ip, &onState, nil, nil); err != nil {
+			fmt.Printf("✗ Failed to turn on %s\n", name)
+		} else {
+			fmt.Printf("✓ Turned on %s\n", name)
+		}
+	}
+}
+
+func cliTurnOff(config *Config) {
+	for name, ip := range config.Lights {
+		offState := 0
+		if err := setLight(ip, &offState, nil, nil); err != nil {
+			fmt.Printf("✗ Failed to turn off %s\n", name)
+		} else {
+			fmt.Printf("✓ Turned off %s\n", name)
+		}
+	}
+}
+
+func cliBrightness(config *Config) {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: keylight bright [+|-|=|value]")
+		os.Exit(1)
+	}
+
+	action := os.Args[2]
+
+	switch action {
+	case "+":
+		// Increase brightness by 5%
+		for name, ip := range config.Lights {
+			state, err := getLightState(ip)
+			if err != nil {
+				fmt.Printf("✗ Failed to get state for %s\n", name)
+				continue
+			}
+			newBright := state.Brightness + 5
+			if newBright > 100 {
+				newBright = 100
+			}
+			if err := setLight(ip, nil, &newBright, nil); err != nil {
+				fmt.Printf("✗ Failed to adjust %s\n", name)
+			} else {
+				fmt.Printf("✓ %s brightness: %d%%\n", name, newBright)
+			}
+		}
+	case "-":
+		// Decrease brightness by 5%
+		for name, ip := range config.Lights {
+			state, err := getLightState(ip)
+			if err != nil {
+				fmt.Printf("✗ Failed to get state for %s\n", name)
+				continue
+			}
+			newBright := state.Brightness - 5
+			if newBright < 3 {
+				newBright = 3
+			}
+			if err := setLight(ip, nil, &newBright, nil); err != nil {
+				fmt.Printf("✗ Failed to adjust %s\n", name)
+			} else {
+				fmt.Printf("✓ %s brightness: %d%%\n", name, newBright)
+			}
+		}
+	case "=":
+		// Equalize all lights to the average brightness
+		totalBright := 0
+		count := 0
+		for _, ip := range config.Lights {
+			state, err := getLightState(ip)
+			if err == nil {
+				totalBright += state.Brightness
+				count++
+			}
+		}
+		if count == 0 {
+			fmt.Println("✗ Could not read any lights")
+			return
+		}
+		avgBright := totalBright / count
+		fmt.Printf("Setting all lights to %d%%\n", avgBright)
+		for name, ip := range config.Lights {
+			if err := setLight(ip, nil, &avgBright, nil); err != nil {
+				fmt.Printf("✗ Failed to set %s\n", name)
+			} else {
+				fmt.Printf("✓ %s brightness: %d%%\n", name, avgBright)
+			}
+		}
+	default:
+		// Set specific value
+		var brightness int
+		n, err := fmt.Sscanf(action, "%d", &brightness)
+		if n == 1 && err == nil {
+			if brightness < 3 || brightness > 100 {
+				fmt.Println("Brightness must be between 3 and 100")
+				os.Exit(1)
+			}
+			for name, ip := range config.Lights {
+				if err := setLight(ip, nil, &brightness, nil); err != nil {
+					fmt.Printf("✗ Failed to set %s\n", name)
+				} else {
+					fmt.Printf("✓ %s brightness: %d%%\n", name, brightness)
+				}
+			}
+			config.LastBrightness = brightness
+			saveConfig(config)
+		} else {
+			fmt.Println("Invalid brightness value")
+			os.Exit(1)
+		}
+	}
+}
+
+func cliTemperature(config *Config) {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: keylight temp [+|-|=|value]")
+		os.Exit(1)
+	}
+
+	action := os.Args[2]
+
+	switch action {
+	case "+":
+		// Increase temperature by 200K
+		for name, ip := range config.Lights {
+			state, err := getLightState(ip)
+			if err != nil {
+				fmt.Printf("✗ Failed to get state for %s\n", name)
+				continue
+			}
+			currentTemp := int(1000000 / state.Temperature)
+			newTemp := currentTemp + 200
+			if newTemp > 7000 {
+				newTemp = 7000
+			}
+			if err := setLight(ip, nil, nil, &newTemp); err != nil {
+				fmt.Printf("✗ Failed to adjust %s\n", name)
+			} else {
+				fmt.Printf("✓ %s temperature: %dK\n", name, newTemp)
+			}
+		}
+	case "-":
+		// Decrease temperature by 200K
+		for name, ip := range config.Lights {
+			state, err := getLightState(ip)
+			if err != nil {
+				fmt.Printf("✗ Failed to get state for %s\n", name)
+				continue
+			}
+			currentTemp := int(1000000 / state.Temperature)
+			newTemp := currentTemp - 200
+			if newTemp < 2900 {
+				newTemp = 2900
+			}
+			if err := setLight(ip, nil, nil, &newTemp); err != nil {
+				fmt.Printf("✗ Failed to adjust %s\n", name)
+			} else {
+				fmt.Printf("✓ %s temperature: %dK\n", name, newTemp)
+			}
+		}
+	case "=":
+		// Equalize all lights to the average temperature
+		totalTemp := 0
+		count := 0
+		for _, ip := range config.Lights {
+			state, err := getLightState(ip)
+			if err == nil {
+				totalTemp += int(1000000 / state.Temperature)
+				count++
+			}
+		}
+		if count == 0 {
+			fmt.Println("✗ Could not read any lights")
+			return
+		}
+		avgTemp := totalTemp / count
+		fmt.Printf("Setting all lights to %dK\n", avgTemp)
+		for name, ip := range config.Lights {
+			if err := setLight(ip, nil, nil, &avgTemp); err != nil {
+				fmt.Printf("✗ Failed to set %s\n", name)
+			} else {
+				fmt.Printf("✓ %s temperature: %dK\n", name, avgTemp)
+			}
+		}
+	default:
+		// Set specific value
+		var temperature int
+		n, err := fmt.Sscanf(action, "%d", &temperature)
+		if n == 1 && err == nil {
+			if temperature < 2900 || temperature > 7000 {
+				fmt.Println("Temperature must be between 2900K and 7000K")
+				os.Exit(1)
+			}
+			for name, ip := range config.Lights {
+				if err := setLight(ip, nil, nil, &temperature); err != nil {
+					fmt.Printf("✗ Failed to set %s\n", name)
+				} else {
+					fmt.Printf("✓ %s temperature: %dK\n", name, temperature)
+				}
+			}
+			config.LastTemperature = temperature
+			saveConfig(config)
+		} else {
+			fmt.Println("Invalid temperature value")
+			os.Exit(1)
+		}
+	}
+}
+
+func cliList(config *Config) {
+	if len(config.Lights) == 0 {
+		fmt.Println("No lights configured. Run: keylight detect")
+		return
+	}
+
+	fmt.Println("Configured lights:")
+	i := 1
+	for name, ip := range config.Lights {
+		fmt.Printf("  %d. %s (%s)\n", i, name, ip)
+		i++
+	}
+}
+
+func cliDetect() {
+	fmt.Println("Discovering lights...")
+	discovered := runDiscovery()
+
+	if len(discovered) == 0 {
+		fmt.Println("✗ No lights found")
+		return
+	}
+
+	config := loadConfig()
+	config.Lights = discovered
+	saveConfig(config)
+	fmt.Printf("\n✓ Discovered %d light(s)\n", len(discovered))
+}
+
+func cliStatus(config *Config) {
+	if len(config.Lights) == 0 {
+		fmt.Println("No lights configured. Run: keylight detect")
+		return
+	}
+
+	fmt.Println("Light status:")
+	for name, ip := range config.Lights {
+		state, err := getLightState(ip)
+		if err != nil {
+			fmt.Printf("  %s: Offline\n", name)
+			continue
+		}
+
+		status := "Off"
+		if state.On == 1 {
+			status = "On"
+		}
+		temp := int(1000000 / state.Temperature)
+		fmt.Printf("  %s: %s | Brightness: %d%% | Temperature: %dK\n", name, status, state.Brightness, temp)
+	}
+}
+
+func cliHelp() {
+	help := `Elgato Key Light Controller
+
+USAGE:
+  keylight                    Open TUI interface
+  keylight [command] [args]   Run CLI command
+
+COMMANDS:
+  on                          Turn on all lights
+  off                         Turn off all lights
+
+  bright +                    Increase brightness by 5%
+  bright -                    Decrease brightness by 5%
+  bright =                    Equalize brightness across all lights
+  bright <value>              Set brightness to specific value (3-100)
+
+  temp +                      Increase temperature by 200K
+  temp -                      Decrease temperature by 200K
+  temp =                      Equalize temperature across all lights
+  temp <value>                Set temperature to specific value (2900-7000)
+
+  list                        Show all configured lights
+  detect                      Discover lights on network
+  status                      Show status of all lights
+
+  <light_name> <command>      Control specific light
+                              Example: keylight "Elgato Key Light 1" on
+
+  help                        Show this help message
+
+EXAMPLES:
+  keylight on                 Turn on all lights
+  keylight bright 50          Set all lights to 50% brightness
+  keylight temp 4000          Set all lights to 4000K
+  keylight bright =           Match brightness across all lights
+  keylight status             Check status of all lights
+`
+	fmt.Println(help)
+}
+
+func cliSpecificLight(config *Config, lightIdentifier string) {
+	// Try to find light by name or index
+	var targetIP string
+	var targetName string
+
+	// Check if it's a numeric index
+	var index int
+	n, _ := fmt.Sscanf(lightIdentifier, "%d", &index)
+	if n == 1 && index > 0 {
+		// Find light by index
+		i := 1
+		for name, ip := range config.Lights {
+			if i == index {
+				targetIP = ip
+				targetName = name
+				break
+			}
+			i++
+		}
+	} else {
+		// Find light by name
+		for name, ip := range config.Lights {
+			if name == lightIdentifier {
+				targetIP = ip
+				targetName = name
+				break
+			}
+		}
+	}
+
+	if targetIP == "" {
+		fmt.Printf("✗ Light '%s' not found. Use 'keylight list' to see available lights.\n", lightIdentifier)
+		os.Exit(1)
+	}
+
+	if len(os.Args) < 3 {
+		fmt.Printf("Usage: keylight \"%s\" [on|off|bright|temp] [args]\n", targetName)
+		os.Exit(1)
+	}
+
+	command := os.Args[2]
+
+	switch command {
+	case "on":
+		onState := 1
+		if err := setLight(targetIP, &onState, nil, nil); err != nil {
+			fmt.Printf("✗ Failed to turn on %s\n", targetName)
+		} else {
+			fmt.Printf("✓ Turned on %s\n", targetName)
+		}
+	case "off":
+		offState := 0
+		if err := setLight(targetIP, &offState, nil, nil); err != nil {
+			fmt.Printf("✗ Failed to turn off %s\n", targetName)
+		} else {
+			fmt.Printf("✓ Turned off %s\n", targetName)
+		}
+	case "bright":
+		if len(os.Args) < 4 {
+			fmt.Println("Usage: keylight <light> bright [value]")
+			os.Exit(1)
+		}
+		var brightness int
+		n, err := fmt.Sscanf(os.Args[3], "%d", &brightness)
+		if n == 1 && err == nil {
+			if brightness < 3 || brightness > 100 {
+				fmt.Println("Brightness must be between 3 and 100")
+				os.Exit(1)
+			}
+			if err := setLight(targetIP, nil, &brightness, nil); err != nil {
+				fmt.Printf("✗ Failed to set brightness for %s\n", targetName)
+			} else {
+				fmt.Printf("✓ %s brightness: %d%%\n", targetName, brightness)
+			}
+		} else {
+			fmt.Println("Invalid brightness value")
+			os.Exit(1)
+		}
+	case "temp":
+		if len(os.Args) < 4 {
+			fmt.Println("Usage: keylight <light> temp [value]")
+			os.Exit(1)
+		}
+		var temperature int
+		n, err := fmt.Sscanf(os.Args[3], "%d", &temperature)
+		if n == 1 && err == nil {
+			if temperature < 2900 || temperature > 7000 {
+				fmt.Println("Temperature must be between 2900K and 7000K")
+				os.Exit(1)
+			}
+			if err := setLight(targetIP, nil, nil, &temperature); err != nil {
+				fmt.Printf("✗ Failed to set temperature for %s\n", targetName)
+			} else {
+				fmt.Printf("✓ %s temperature: %dK\n", targetName, temperature)
+			}
+		} else {
+			fmt.Println("Invalid temperature value")
+			os.Exit(1)
+		}
+	case "status":
+		state, err := getLightState(targetIP)
+		if err != nil {
+			fmt.Printf("✗ %s: Offline\n", targetName)
+		} else {
+			status := "Off"
+			if state.On == 1 {
+				status = "On"
+			}
+			temp := int(1000000 / state.Temperature)
+			fmt.Printf("%s: %s | Brightness: %d%% | Temperature: %dK\n", targetName, status, state.Brightness, temp)
+		}
+	default:
+		fmt.Printf("Unknown command: %s\n", command)
+		fmt.Println("Available commands: on, off, bright, temp, status")
 		os.Exit(1)
 	}
 }
