@@ -779,25 +779,21 @@ func toggleLight(ip string) error {
 
 // Fast toggle without status check - for quick button presses
 func toggleLightFast(ip string) error {
-	// Get current state quickly
-	client := &http.Client{Timeout: 1 * time.Second}
+	// Get current state quickly with 2 second timeout for reliability
+	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(fmt.Sprintf("http://%s:9123/elgato/lights", ip))
 	if err != nil {
-		// If failed, just turn on
-		newState := 1
-		return setLight(ip, &newState, nil, nil)
+		return fmt.Errorf("failed to get light state: %w", err)
 	}
 	defer resp.Body.Close()
 
 	var lightsResp LightsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&lightsResp); err != nil {
-		newState := 1
-		return setLight(ip, &newState, nil, nil)
+		return fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	if len(lightsResp.Lights) == 0 {
-		newState := 1
-		return setLight(ip, &newState, nil, nil)
+		return fmt.Errorf("no lights in response")
 	}
 
 	// Toggle
@@ -813,15 +809,26 @@ func toggleLightFast(ip string) error {
 		},
 	}
 
-	jsonData, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("PUT", fmt.Sprintf("http://%s:9123/elgato/lights", ip), bytes.NewBuffer(jsonData))
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	req, err := http.NewRequest("PUT", fmt.Sprintf("http://%s:9123/elgato/lights", ip), bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp2, err := client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to send toggle request: %w", err)
 	}
 	defer resp2.Body.Close()
+
+	if resp2.StatusCode != 200 {
+		return fmt.Errorf("API returned status %d", resp2.StatusCode)
+	}
 
 	return nil
 }
@@ -1311,7 +1318,8 @@ func cliSpecificLight(config *Config, lightIdentifier string) {
 	// If no command specified, toggle the light (fast mode)
 	if len(os.Args) < 3 {
 		if err := toggleLightFast(targetIP); err != nil {
-			fmt.Printf("✗ Failed to toggle %s\n", targetName)
+			fmt.Printf("✗ Failed to toggle %s: %v\n", targetName, err)
+			os.Exit(1)
 		} else {
 			fmt.Printf("✓ Toggled %s\n", targetName)
 		}
