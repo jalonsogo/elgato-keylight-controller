@@ -698,7 +698,8 @@ func discoverLights(m *model) {
 
 // API Functions
 func getLightState(ip string) (*LightState, error) {
-	resp, err := http.Get(fmt.Sprintf("http://%s:9123/elgato/lights", ip))
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://%s:9123/elgato/lights", ip))
 	if err != nil {
 		return nil, err
 	}
@@ -746,7 +747,7 @@ func setLight(ip string, on *int, brightness *int, temperature *int) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -774,6 +775,55 @@ func toggleLight(ip string) error {
 	}
 
 	return setLight(ip, &newState, nil, nil)
+}
+
+// Fast toggle without status check - for quick button presses
+func toggleLightFast(ip string) error {
+	// Get current state quickly
+	client := &http.Client{Timeout: 1 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://%s:9123/elgato/lights", ip))
+	if err != nil {
+		// If failed, just turn on
+		newState := 1
+		return setLight(ip, &newState, nil, nil)
+	}
+	defer resp.Body.Close()
+
+	var lightsResp LightsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&lightsResp); err != nil {
+		newState := 1
+		return setLight(ip, &newState, nil, nil)
+	}
+
+	if len(lightsResp.Lights) == 0 {
+		newState := 1
+		return setLight(ip, &newState, nil, nil)
+	}
+
+	// Toggle
+	newState := 0
+	if lightsResp.Lights[0].On == 0 {
+		newState = 1
+	}
+
+	// Build and send request inline for speed
+	payload := map[string]interface{}{
+		"lights": []map[string]interface{}{
+			{"on": newState},
+		},
+	}
+
+	jsonData, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("PUT", fmt.Sprintf("http://%s:9123/elgato/lights", ip), bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp2, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp2.Body.Close()
+
+	return nil
 }
 
 func main() {
@@ -822,7 +872,7 @@ func runDiscovery() map[string]string {
 	}
 
 	entries := make(chan *zeroconf.ServiceEntry)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 	defer cancel()
 
 	err = resolver.Browse(ctx, "_elg._tcp", "local.", entries)
@@ -884,23 +934,55 @@ func handleCLI() {
 // CLI Commands
 
 func cliTurnOn(config *Config) {
+	// Use goroutines for parallel execution
+	type result struct {
+		name string
+		err  error
+	}
+	results := make(chan result, len(config.Lights))
+
 	for name, ip := range config.Lights {
-		onState := 1
-		if err := setLight(ip, &onState, nil, nil); err != nil {
-			fmt.Printf("✗ Failed to turn on %s\n", name)
+		go func(n, i string) {
+			onState := 1
+			err := setLight(i, &onState, nil, nil)
+			results <- result{name: n, err: err}
+		}(name, ip)
+	}
+
+	// Collect results
+	for i := 0; i < len(config.Lights); i++ {
+		r := <-results
+		if r.err != nil {
+			fmt.Printf("✗ Failed to turn on %s\n", r.name)
 		} else {
-			fmt.Printf("✓ Turned on %s\n", name)
+			fmt.Printf("✓ Turned on %s\n", r.name)
 		}
 	}
 }
 
 func cliTurnOff(config *Config) {
+	// Use goroutines for parallel execution
+	type result struct {
+		name string
+		err  error
+	}
+	results := make(chan result, len(config.Lights))
+
 	for name, ip := range config.Lights {
-		offState := 0
-		if err := setLight(ip, &offState, nil, nil); err != nil {
-			fmt.Printf("✗ Failed to turn off %s\n", name)
+		go func(n, i string) {
+			offState := 0
+			err := setLight(i, &offState, nil, nil)
+			results <- result{name: n, err: err}
+		}(name, ip)
+	}
+
+	// Collect results
+	for i := 0; i < len(config.Lights); i++ {
+		r := <-results
+		if r.err != nil {
+			fmt.Printf("✗ Failed to turn off %s\n", r.name)
 		} else {
-			fmt.Printf("✓ Turned off %s\n", name)
+			fmt.Printf("✓ Turned off %s\n", r.name)
 		}
 	}
 }
@@ -1226,9 +1308,9 @@ func cliSpecificLight(config *Config, lightIdentifier string) {
 		os.Exit(1)
 	}
 
-	// If no command specified, toggle the light
+	// If no command specified, toggle the light (fast mode)
 	if len(os.Args) < 3 {
-		if err := toggleLight(targetIP); err != nil {
+		if err := toggleLightFast(targetIP); err != nil {
 			fmt.Printf("✗ Failed to toggle %s\n", targetName)
 		} else {
 			fmt.Printf("✓ Toggled %s\n", targetName)
