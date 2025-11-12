@@ -107,6 +107,32 @@ Settings are stored in `~/.config/keylight/config.json`:
 }
 ```
 
+## Using with Loupedeck
+
+For Loupedeck or other automation tools, use the `||` separator syntax:
+
+```
+/Users/javieralonso/elgato/keylight-go||1
+/Users/javieralonso/elgato/keylight-go||on
+/Users/javieralonso/elgato/keylight-go||bright +
+```
+
+### Troubleshooting Loupedeck
+
+If commands fail in Loupedeck but work in Terminal:
+
+1. **Use the logging wrapper** to debug:
+   ```
+   /Users/javieralonso/elgato/keylight-log.sh||1
+   ```
+   Check `/tmp/keylight-debug.log` for errors
+
+2. **Grant network permissions** - On first run from Loupedeck, macOS may prompt for network access. Click "Allow"
+
+3. **Check Firewall settings** - Go to System Settings > Network > Firewall and ensure the app has network access
+
+4. **Retry logic** - The app automatically retries failed connections up to 3 times, which handles most transient network issues
+
 ## Dependencies
 
 - [Bubble Tea](https://github.com/charmbracelet/bubbletea) - TUI framework

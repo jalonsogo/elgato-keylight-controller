@@ -779,6 +779,25 @@ func toggleLight(ip string) error {
 
 // Fast toggle without status check - for quick button presses
 func toggleLightFast(ip string) error {
+	// Retry up to 3 times for Loupedeck/automation reliability
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		err := toggleLightAttempt(ip)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+
+		// Small delay before retry (only if not last attempt)
+		if attempt < 3 {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	return fmt.Errorf("failed after 3 attempts: %w", lastErr)
+}
+
+func toggleLightAttempt(ip string) error {
 	// Get current state quickly with 2 second timeout for reliability
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(fmt.Sprintf("http://%s:9123/elgato/lights", ip))
