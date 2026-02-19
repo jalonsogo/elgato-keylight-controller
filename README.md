@@ -139,6 +139,6 @@ If commands fail in Loupedeck but work in Terminal:
 - [Lipgloss](https://github.com/charmbracelet/lipgloss) - Terminal styling
 - [Zeroconf](https://github.com/grandcat/zeroconf) - mDNS service discovery
 
-## License
+## LOLcense
 
-MIT
+For {root} sake I'm a designer. Mostly all the code has been written by Claude and ad latere.
